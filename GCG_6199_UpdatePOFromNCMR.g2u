@@ -1,0 +1,154 @@
+﻿Program.Sub.Preflight.Start
+V.Global.bConOpen.Declare(Boolean, False)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Author: Daniel Duncan & Brandon Medina
+'Customer: TE Connectivity
+'Program Name: Update PO from NCMR
+'Date Started: 1/4/2021
+'Description: When NCMR is processed, this script updates the PO line user field 5 with the NCMR number.
+'Quote: 12571
+'GAP: 6199
+
+v.Local.sSQL.Declare
+v.Local.sNCMR.Declare
+v.Local.sPO.Declare
+v.Local.sPOLine.Declare
+V.Local.sDispAct.Declare
+V.Local.i.Declare
+V.Local.iRowCount.Declare
+V.Local.iMatchCount.Declare
+V.Local.sRowContent.Declare
+V.Local.sLinesBefore.Declare
+V.Local.sTempFile.Declare
+V.Local.bFileExists.Declare
+V.Local.sPOLineIterate.Declare
+V.Local.sOldRecordCount.Declare
+V.Local.sIsDisposed.Declare
+V.Local.sNewRecordCount.Declare
+V.Local.sRecordCount.Declare
+
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+
+f.Intrinsic.Control.Try
+	'Hook #: 28903
+	'Passed vars:
+	'	NCMR #: 	000002
+	'	PO:			000026
+	'	PO Line:	000015
+	'	Dis Act:	000056 or maybe 000000
+	'If the NCMR has a PO number and line atatched, when the NCMR saves, update UF5 on the PO line.
+	'Distinguish between the case where disposal action set to "Put Back on Original PO". This will need to go find those newly created PO lines and update UF5, otherwise just update the line of the PO that is currently showing on screen 
+	f.Intrinsic.Control.If(v.Caller.Hook,=,28903)
+		'Set the vars and format them
+		f.Intrinsic.String.LPad(v.Passed.000002,"0",7,v.local.sNCMR)
+		f.Intrinsic.String.LPad(v.Passed.000026,"0",7,v.local.sPO)
+		f.Intrinsic.String.LPad(v.Passed.000015,"0",3,v.local.sPOLine)
+		
+		'If temp file exists, means that there are parts being put back on original PO 
+		F.Intrinsic.String.Build("{0}\6199Temp.txt", V.Caller.FilesDir, V.Local.sTempFile)
+		F.Intrinsic.File.Exists(V.Local.sTempFile, V.Local.bFileExists)
+		F.Intrinsic.Control.If(V.Local.bFileExists)
+			'Calculate how mnay new PO lines were created from temp file
+			F.Intrinsic.File.File2String(V.Local.sTempFile, V.Local.sOldRecordCount)
+			F.Intrinsic.String.Build("select count(PURCHASE_ORDER) from V_PO_LINES where PURCHASE_ORDER = '{0}'", V.Local.sPO, V.Local.sSQL)
+			F.ODBC.Connection!con.OpenCompanyConnection
+			V.Global.bConOpen.Set(True)
+			F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL, V.Local.sNewRecordCount)
+			F.Intrinsic.Math.Sub(V.Local.sNewRecordCount, V.Local.sOldRecordCount, V.Local.sRecordCount)
+			
+			'Grab those line numbers 
+			F.Intrinsic.String.Build("select top {0} (RECORD_NO) from V_PO_LINES where PURCHASE_ORDER = '{1}' order by RECORD_NO desc", V.Local.sRecordCount, V.Local.sPO, V.Local.sSQL)
+			F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL, V.Local.sPOLineIterate)
+			F.Intrinsic.String.Split(V.Local.sPOLineIterate, "#$#", V.Local.sPOLineIterate)
+			V.Local.sRecordCount.Set(V.Local.sRecordCount.--)
+			
+			'Set base SQL statement 
+			F.Intrinsic.String.Build("update PO_LINES set USER_5 ='{0}' where PURCHASE_ORDER ='{1}' and RECORD_NO in (", V.Local.sNCMR, V.Local.sPO, V.Local.sSQL)
+			'Build up in statement ('0030', '0020', '0010')
+			F.Intrinsic.Control.For(V.Local.i, 0, V.Local.sRecordCount, 1)
+				F.Intrinsic.Control.If(V.Local.i, =, 0)
+					F.Intrinsic.String.Concat(V.Local.sSQL, "'", V.Local.sPOLineIterate(V.Local.i), "'", V.Local.sSQL)
+				F.Intrinsic.Control.Else
+					F.Intrinsic.String.Concat(V.Local.sSQL, ", '", V.Local.sPOLineIterate(V.Local.i), "'", V.Local.sSQL)
+				F.Intrinsic.Control.EndIf
+			F.Intrinsic.Control.Next(V.Local.i)
+			F.Intrinsic.String.Concat(V.Local.sSQL, ")", V.Local.sSQL)
+			
+			'Execute and close connection
+			F.ODBC.Connection!con.Execute(V.Local.sSQL)
+			F.ODBC.Connection!con.Close
+			V.Global.bConOpen.Set(False)
+			
+			'Delete temp file 
+			F.Intrinsic.File.DeleteFile(V.Local.sTempFile)
+		F.Intrinsic.Control.Else
+			f.Intrinsic.String.Build("update po_lines set user_5='{0}' where purchase_order='{1}' and record_no='{2}0';",v.Local.sNCMR,v.Local.sPO,v.Local.sPOLine,v.Local.sSQL)
+			f.ODBC.Connection!con.opencompanyconnection
+			V.Global.bConOpen.Set(True)
+			f.ODBC.Connection!con.Execute(v.Local.sSQL)
+			f.ODBC.Connection!con.close
+			V.Global.bConOpen.Set(False)
+		F.Intrinsic.Control.EndIf
+	'Presave Process disp 
+	F.Intrinsic.Control.ElseIf(V.Caller.Hook, =, 28902)
+		F.Intrinsic.BDF.Load("QualityGrid", "AUX001")
+		F.Intrinsic.BDF.ReadRowCount("QualityGrid", V.Local.iRowCount)
+		V.Local.iRowCount.Set(V.Local.iRowCount.--)
+		
+		F.Intrinsic.Control.For(V.Local.i, 0, V.Local.iRowCount, 1)
+			'Look for "Put Back on Original PO" in Quality grid 
+			F.Intrinsic.BDF.ReadRow("QualityGrid", V.Local.i, V.Local.sRowContent)
+			F.Intrinsic.String.Split(V.Local.sRowContent, "|~|", V.Local.sRowContent)
+			'Index 6 Disposal Action
+			V.Local.sDispAct.Set(V.Local.sRowContent(6))
+			'Index 7 Is Disposed 
+			V.Local.sIsDisposed.Set(V.Local.sRowContent(7))
+			F.Intrinsic.Control.If(V.Local.sDispAct.Trim, =, "Put Back on Original PO", AND, V.Local.sIsDisposed.Trim, =, "N")
+				V.Local.iMatchCount.Set(V.Local.iMatchCount.++)
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.Next(V.Local.i)
+		
+		F.Intrinsic.String.LPad(V.Passed.000026,"0",7,v.local.sPO)
+		
+		'Get how many lines PO on NCMR screen had 
+		F.Intrinsic.Control.If(V.Local.iMatchCount, >, 0)
+			F.Intrinsic.String.Build("select count(PURCHASE_ORDER) from V_PO_LINES where PURCHASE_ORDER = '{0}'", V.Local.sPO, V.Local.sSQL)
+			F.ODBC.Connection!con.OpenCompanyConnection
+			V.Global.bConOpen.Set(True)
+			F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL, V.Local.sLinesBefore)
+			F.ODBC.Connection!con.Close
+			V.Global.bConOpen.Set(False)
+			
+			'Write how many lines PO on NCMR screen had before 
+			F.Intrinsic.String.Build("{0}\6199Temp.txt", V.Caller.FilesDir, V.Local.sTempFile)
+			F.Intrinsic.File.String2File(V.Local.sTempFile, V.Local.sLinesBefore)
+		F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.EndIf
+	
+f.Intrinsic.Control.Catch
+	f.Intrinsic.Control.CallSub(ErrorMsg, CurrentSub, v.Ambient.CurrentSubroutine)
+f.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.ErrorMsg.Start
+v.Local.sError.Declare
+
+'Closes ODBC connection, default to connection : "con"
+'f.Intrinsic.Control.If(v.ODBC!con.State, =, 1)
+'	f.ODBC.Connection!con.Close
+'f.Intrinsic.Control.EndIf
+F.Intrinsic.Control.If(V.Global.bConOpen)
+	F.ODBC.Connection!con.Close
+F.Intrinsic.Control.EndIf
+
+'Generic Error message.
+f.Intrinsic.String.Build("Project GCG_6199_UpdatePOFromNCMR.g2u {0}{0}Subroutine: {1}{0}Error: {2} with Description: {3}", v.Ambient.NewLine, v.Args.CurrentSub, v.Ambient.ErrorNumber, v.Ambient.ErrorDescription, v.Local.sError)
+f.Intrinsic.UI.Msgbox(v.Local.sError)
+Program.Sub.ErrorMsg.End
+
+Program.Sub.Comments.Start
+${$5$}$3.0.0.0$}$1
+${$6$}$bmedina$}$20210903111749621$}$kOipCrsyLBVj2KoSwkcdK23ChxGVcBlE1sgf+ykExHpp3LhOAn3gKuiTa8Djh5r0vWXyDLuhAkk=
+Program.Sub.Comments.End
